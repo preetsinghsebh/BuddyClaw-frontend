@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState, Suspense, type CSSProperties } from "react";
 import { useSearchParams } from "next/navigation";
 import { 
     Activity, 
@@ -12,9 +12,17 @@ import {
     ArrowLeft,
     TrendingUp,
     LayoutDashboard,
-    UserCircle
+    UserCircle,
+    Users,
+    Share2,
+    CheckCircle2,
+    User
 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
+import Image from "next/image";
+import { PERSONAS, PERSONA_THEMES } from "@/lib/personas";
+import type { PersonaTheme } from "@/lib/personas";
 
 interface UserProfile {
     nicknames: string[];
@@ -22,7 +30,22 @@ interface UserProfile {
     streakCount: number;
     moodScore: number;
     lastChatDate: string;
+    activePersonaId?: string;
+    memory?: { role: string; content: string }[];
+    xp?: number;
+    level?: number;
+    relationshipStage?: string;
+    streak?: number;
+    dailyVibe?: string;
+    unlockedSecrets?: string[];
 }
+
+const DEFAULT_THEME: PersonaTheme = {
+    primary: "#FFB300",
+    secondary: "#FCD34D",
+    orb: "rgba(255,179,0,0.35)",
+    vibe: "/assets/companions/ziva.jpg"
+};
 
 // Separate content component to use searchParams safely
 function DashboardContent() {
@@ -30,7 +53,82 @@ function DashboardContent() {
     const chatId = searchParams.get("id");
     
     const [loading, setLoading] = useState(true);
+    const [switching, setSwitching] = useState(false);
+    const [councilQuestion, setCouncilQuestion] = useState("");
+    const [councilResults, setCouncilResults] = useState<any[] | null>(null);
+    const [askingCouncil, setAskingCouncil] = useState(false);
     const [userData, setUserData] = useState<{ profile: UserProfile; activePersonas: any[] } | null>(null);
+    const [availablePersonas, setAvailablePersonas] = useState<any[]>([]);
+    
+    // Toast UI State
+    const [showToast, setShowToast] = useState(false);
+    const [toastMessage, setToastMessage] = useState("");
+    
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+
+    const handleSwitchPersona = async (personaId: string) => {
+        if (personaId === userData?.profile?.activePersonaId || !chatId) return;
+        setSwitching(true);
+        try {
+            const res = await fetch(`${apiUrl}/api/switch-persona`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: chatId, personaId })
+            });
+            if (res.ok) {
+                // Refresh data to reflect switch
+                await fetchData();
+            }
+        } catch (err) {
+            console.error("Switch failed:", err);
+        } finally {
+            setSwitching(false);
+        }
+    };
+
+    const handleShare = (text: string, author: string = "Companion", personaId?: string) => {
+        const shareUrl = typeof window !== 'undefined' ? `${window.location.origin}/auth?ref=${personaId || 'buddy'}` : 'BuddyClaw.chat';
+        const shareText = `"${text}"\n\n— ${author} via BuddyClaw.chat 🐾\nConnect with us: ${shareUrl}`;
+        
+        navigator.clipboard.writeText(shareText);
+        setToastMessage("Link copied to clipboard! 🚀");
+        setShowToast(true);
+        setTimeout(() => setShowToast(false), 3000);
+    };
+
+    const handleAskCouncil = async () => {
+        if (!councilQuestion || !chatId) return;
+        setAskingCouncil(true);
+        try {
+            const res = await fetch(`${apiUrl}/api/council`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: chatId, text: councilQuestion })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setCouncilResults(data.answers);
+            }
+        } catch (err) {
+            console.error("Council consultation failed:", err);
+        } finally {
+            setAskingCouncil(false);
+        }
+    };
+
+    const fetchData = async () => {
+        try {
+            const res = await fetch(`${apiUrl}/api/user/stats?id=${chatId}`);
+            if (res.ok) {
+                const data = await res.json();
+                setUserData(data);
+            }
+        } catch (err) {
+            console.error("Failed to load dashboard data:", err);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     useEffect(() => {
         if (!chatId) {
@@ -38,22 +136,20 @@ function DashboardContent() {
             return;
         }
 
-        const fetchData = async () => {
+        const fetchPersonas = async () => {
             try {
-                const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
-                const res = await fetch(`${apiUrl}/api/user/stats?id=${chatId}`);
+                const res = await fetch(`${apiUrl}/personas`);
                 if (res.ok) {
                     const data = await res.json();
-                    setUserData(data);
+                    setAvailablePersonas(data);
                 }
             } catch (err) {
-                console.error("Failed to load dashboard data:", err);
-            } finally {
-                setLoading(false);
+                console.error("Failed to load personas:", err);
             }
         };
 
         fetchData();
+        fetchPersonas();
     }, [chatId]);
 
     if (loading) {
@@ -87,55 +183,170 @@ function DashboardContent() {
     }
 
     const profile = userData?.profile || { nicknames: [], facts: [], streakCount: 0, moodScore: 50, lastChatDate: "" };
+    const personaId = profile.activePersonaId || "ziva";
+    const personaMeta = PERSONAS.find((p) => p.id === personaId) || PERSONAS[0];
+    const personaTheme = PERSONA_THEMES[personaMeta.id] || DEFAULT_THEME;
+    const xpFillWidth = Math.min((profile.xp || 0) / 10, 100);
+    const glowTransition = { duration: 1.5, ease: "easeInOut" };
+    const headerStyle: CSSProperties = {
+        boxShadow: `0 30px 70px ${personaTheme.secondary}20`,
+        borderColor: `${personaTheme.secondary}30`,
+        borderWidth: "1px",
+        borderStyle: "solid"
+    };
+    const sectionStyle: CSSProperties = {
+        borderColor: `${personaTheme.secondary}30`,
+        boxShadow: `0 20px 45px ${personaTheme.secondary}15`
+    };
+    const vibeStyle: CSSProperties = {
+        backgroundImage: `url(${personaTheme.vibe})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        opacity: 0.08,
+        filter: "blur(40px)",
+        mixBlendMode: "screen"
+    };
+    const xpGradient = `linear-gradient(120deg, ${personaTheme.primary}, ${personaTheme.secondary})`;
+    const memoryUserBorder = `${personaTheme.secondary}40`;
+    const memoryCompanionBorder = personaTheme.secondary;
 
     return (
         <div className="min-h-screen bg-[#05050A] text-white p-4 md:p-8">
             {/* Ambient Background */}
             <div className="fixed inset-0 overflow-hidden pointer-events-none">
-                <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-[#FFB300]/5 blur-[120px]" />
-                <div className="absolute bottom-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-blue-500/5 blur-[120px]" />
+                <motion.div
+                    className="absolute top-[-10%] right-[-10%] w-[45%] h-[45%] rounded-full blur-[140px]"
+                    animate={{ backgroundColor: personaTheme.primary }}
+                    transition={glowTransition}
+                    style={{ opacity: 0.35 }}
+                />
+                <motion.div
+                    className="absolute bottom-[-15%] left-[-10%] w-[30%] h-[30%] rounded-full blur-[140px]"
+                    animate={{ backgroundColor: personaTheme.secondary }}
+                    transition={glowTransition}
+                    style={{ opacity: 0.45 }}
+                />
+                <motion.div
+                    className="absolute inset-0 pointer-events-none"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={glowTransition}
+                    style={vibeStyle}
+                />
             </div>
 
             <div className="max-w-6xl mx-auto relative z-10">
                 {/* Header */}
-                <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-12">
+                <header className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-12 rounded-3xl bg-white/5 border border-white/10 p-6 backdrop-blur-xl" style={headerStyle}>
                     <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-[#FFB300] text-xs font-bold tracking-tighter uppercase mb-2">
-                             <LayoutDashboard className="w-4 h-4" /> 
-                             BuddyClaw OS v1.0
-                        </div>
-                        <h1 className="text-4xl md:text-5xl font-light">
-                            Welcome Back, <span className="font-medium text-[#FFB300]">{profile.nicknames[0] || "Friend"}</span>
+                        <div className="flex items-center gap-2 text-xs font-bold tracking-tighter uppercase mb-2" style={{ color: personaTheme.secondary }}>
+                            <LayoutDashboard className="w-4 h-4" /> 
+                            BuddyClaw OS v1.0
+                       </div>
+                        <h1 className="text-4xl md:text-5xl font-light flex flex-wrap items-center gap-3">
+                            <span className="font-medium" style={{ color: personaTheme.primary }}>{profile.nicknames[0] || "Friend"}</span>
+                            <span className="inline-flex items-center justify-center px-4 py-1.5 rounded-full text-[10px] font-black tracking-widest uppercase" style={{ backgroundColor: personaTheme.primary, color: "#05050A", boxShadow: `0 0 25px ${personaTheme.secondary}55` }}>
+                                LVL {profile.level || 1}
+                            </span>
+                            <span className="inline-flex items-center justify-center px-3 py-1.5 rounded-full text-[10px] font-bold tracking-widest uppercase" style={{ borderColor: `${personaTheme.secondary}40`, backgroundColor: `${personaTheme.secondary}10`, color: personaTheme.secondary }}>
+                                {profile.relationshipStage || "Stranger"}
+                            </span>
                         </h1>
                         <p className="text-white/40">Your neural connections are stable across 25+ across personas.</p>
+                        
+                        {/* XP Progress Bar */}
+                        <div className="mt-4 w-full max-w-sm">
+                            <div className="flex justify-between text-[10px] uppercase tracking-widest text-white/30 font-bold mb-1">
+                                <span>Neural Progression</span>
+                                <span>{profile.xp || 0} / 1000 XP</span>
+                            </div>
+                            <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden border border-white/5">
+                                <div className="h-full" style={{ width: `${xpFillWidth}%`, background: xpGradient, transition: "width 0.6s ease" }} />
+                            </div>
+                        </div>
+                        
+                        {/* Persona Selector */}
+                        <div className="mt-6 flex flex-col gap-2">
+                             <label className="text-[10px] uppercase tracking-widest text-white/30 font-bold">Active Neural Link</label>
+                             <div className="flex items-center gap-3">
+                                 <select 
+                                    value={profile.activePersonaId || "ziva"}
+                                    onChange={(e) => handleSwitchPersona(e.target.value)}
+                                    disabled={switching}
+                                    className="bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-[#FFB300]/50 cursor-pointer disabled:opacity-50 disabled:cursor-wait"
+                                    style={{
+                                        borderColor: `${personaTheme.secondary}40`,
+                                        boxShadow: `0 0 25px ${personaTheme.secondary}20`,
+                                        color: personaTheme.secondary
+                                    }}
+                                 >
+                                    {availablePersonas.map(p => (
+                                        <option key={p.id} value={p.id} className="bg-[#05050A] text-white">
+                                            {p.name}
+                                        </option>
+                                    ))}
+                                 </select>
+                                 {switching && <div className="w-4 h-4 border-2 border-[#FFB300]/20 border-t-[#FFB300] rounded-full animate-spin" />}
+                             </div>
+                        </div>
                     </div>
-                    <div className="flex gap-4">
-                        <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center gap-4">
-                            <div className="p-3 bg-red-500/10 rounded-xl">
+                    <div className="flex flex-wrap gap-4 mt-8 md:mt-0">
+                        <div className="bg-white/5 border rounded-2xl p-4 flex items-center gap-4 group hover:bg-white/10 transition-all" style={sectionStyle}>
+                            <div className="p-3 bg-red-500/10 rounded-xl group-hover:scale-110 transition-transform">
                                 <Flame className="w-6 h-6 text-red-500" />
                             </div>
                             <div>
-                                <div className="text-2xl font-bold">{profile.streakCount}</div>
+                                <div className="text-2xl font-bold">{profile.streak || 0}</div>
                                 <div className="text-[10px] uppercase tracking-widest text-white/40">Global Streak</div>
                             </div>
                         </div>
-                        <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center gap-4">
-                            <div className="p-3 bg-[#FFB300]/10 rounded-xl">
+                        <div className="bg-white/5 border rounded-2xl p-4 flex items-center gap-4 group hover:bg-white/10 transition-all" style={sectionStyle}>
+                            <div className="p-3 bg-[#FFB300]/10 rounded-xl group-hover:scale-110 transition-transform">
                                 <Heart className="w-6 h-6 text-[#FFB300]" />
                             </div>
                             <div>
-                                <div className="text-2xl font-bold">{profile.moodScore}%</div>
+                                <div className="text-2xl font-bold">{profile.moodScore || 85}%</div>
                                 <div className="text-[10px] uppercase tracking-widest text-white/40">Avg Affinity</div>
+                            </div>
+                        </div>
+                        <div className="bg-white/5 border rounded-2xl p-4 flex items-center gap-4 group hover:bg-white/10 transition-all" style={sectionStyle}>
+                            <div className="p-3 bg-purple-500/10 rounded-xl group-hover:scale-110 transition-transform">
+                                <Activity className="w-6 h-6 text-purple-500" />
+                            </div>
+                            <div>
+                                <div className="text-[10px] font-bold text-purple-400 capitalize">{profile.dailyVibe ? "Active" : "Neutral"}</div>
+                                <div className="text-[10px] uppercase tracking-widest text-white/40">Neural Vibe</div>
                             </div>
                         </div>
                     </div>
                 </header>
 
+                {/* Vibe Alert Bar */}
+                {profile.dailyVibe && (
+                    <motion.div 
+                        initial={{ opacity: 0, y: -20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="mb-8 p-5 rounded-2xl bg-white/5 border-l-4 overflow-hidden relative"
+                        style={{ borderLeftColor: personaTheme.primary, backgroundColor: `${personaTheme.primary}05` }}
+                    >
+                        <div className="absolute right-0 top-0 p-4 opacity-5">
+                            <Sparkles className="w-12 h-12" />
+                        </div>
+                        <div className="flex items-center gap-3 mb-1">
+                            <Sparkles className="w-4 h-4" style={{ color: personaTheme.secondary }} />
+                            <span className="text-[10px] font-black uppercase tracking-widest text-white/40">Daily Neural Echo</span>
+                        </div>
+                        <p className="text-sm font-light italic leading-relaxed text-white/80">
+                            "{profile.dailyVibe}"
+                        </p>
+                    </motion.div>
+                )}
+
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                     {/* Main Stats Column */}
                     <div className="lg:col-span-2 space-y-8">
                         {/* Memory Section */}
-                        <section className="bg-white/5 border border-white/10 rounded-3xl p-8 backdrop-blur-xl">
+                        <section className="bg-white/5 border rounded-3xl p-8 backdrop-blur-xl" style={sectionStyle}>
                             <div className="flex items-center justify-between mb-8">
                                 <h2 className="text-xl font-medium flex items-center gap-3">
                                     <Activity className="w-5 h-5 text-[#FFB300]" /> Core Memory Bank
@@ -143,32 +354,130 @@ function DashboardContent() {
                                 <span className="text-[10px] text-white/30 uppercase tracking-[0.2em]">Encrypted Storage</span>
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="space-y-4">
-                                    <h3 className="text-xs font-bold text-white/30 uppercase tracking-widest">Known Identities</h3>
-                                    <div className="flex flex-wrap gap-2">
-                                        {profile.nicknames.length > 0 ? profile.nicknames.map((n, i) => (
-                                            <span key={i} className="px-3 py-1 bg-[#FFB300]/10 border border-[#FFB300]/20 rounded-lg text-[#FFB300] text-sm italic">
-                                                "{n}"
-                                            </span>
-                                        )) : <span className="text-white/20 text-sm">No aliases recorded yet.</span>}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                <div className="space-y-6">
+                                    <div className="space-y-4">
+                                        <h3 className="text-xs font-bold text-white/30 uppercase tracking-widest">Known Identities</h3>
+                                        <div className="flex flex-wrap gap-2">
+                                            {profile.nicknames.length > 0 ? profile.nicknames.map((n, i) => (
+                                                <span key={i} className="px-3 py-1 bg-[#FFB300]/10 border border-[#FFB300]/20 rounded-lg text-[#FFB300] text-sm italic">
+                                                    "{n}"
+                                                </span>
+                                            )) : <span className="text-white/20 text-sm">No aliases recorded yet.</span>}
+                                        </div>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <h3 className="text-xs font-bold text-white/30 uppercase tracking-widest">Neural Fragments</h3>
+                                        <div className="grid grid-cols-1 gap-3">
+                                            {profile.facts.length > 0 ? profile.facts.map((f, i) => (
+                                                <motion.div 
+                                                    key={i} 
+                                                    whileHover={{ x: 5 }}
+                                                    className="p-3 rounded-xl bg-white/5 border border-white/5 text-sm text-white/70 flex items-center gap-3 transition-colors hover:border-[#FFB300]/30"
+                                                >
+                                                    <div className="w-2 h-2 rounded-full shadow-[0_0_8px_#FFB300]" style={{ backgroundColor: personaTheme.primary }} />
+                                                    {f}
+                                                </motion.div>
+                                            )) : <div className="text-white/20 text-sm italic py-4">No neural fragments synced yet.</div>}
+                                        </div>
                                     </div>
                                 </div>
-                                <div className="space-y-4">
-                                    <h3 className="text-xs font-bold text-white/30 uppercase tracking-widest">Observed Facts</h3>
-                                    <ul className="space-y-2">
-                                        {profile.facts.length > 0 ? profile.facts.slice(0, 5).map((f, i) => (
-                                            <li key={i} className="flex items-start gap-3 text-sm text-white/70">
-                                                <div className="w-1.5 h-1.5 rounded-full bg-[#FFB300] mt-1.5 shrink-0" />
-                                                {f}
-                                            </li>
-                                        )) : <li className="text-white/20 text-sm italic">Memory empty. Start chatting.</li>}
-                                    </ul>
+
+                                <div className="space-y-4 pt-6 md:pt-0 border-t md:border-t-0 md:border-l border-white/10 md:pl-8">
+                                    <h3 className="text-xs font-bold text-white/30 uppercase tracking-widest flex items-center gap-2">
+                                        <MessageCircle className="w-3 h-3" /> Recent Neural Transmissions
+                                    </h3>
+                                    <div className="space-y-3 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
+                                        {profile.memory && profile.memory.length > 0 ? profile.memory.map((m, i) => (
+                                            <div 
+                                                key={i}
+                                                className={`p-3 rounded-xl text-xs leading-relaxed ${m.role === 'user' ? 'bg-white/5 text-white/70 ml-4' : 'mr-4'}`}
+                                                style={{
+                                                    borderLeft: `2px solid ${m.role === 'user' ? memoryUserBorder : memoryCompanionBorder}`,
+                                                    backgroundColor: m.role === 'user' ? 'rgba(255,255,255,0.08)' : `${personaTheme.secondary}10`,
+                                                    color: m.role === 'user' ? 'rgba(255,255,255,0.7)' : personaTheme.secondary
+                                                }}
+                                            >
+                                                <span className="opacity-40 uppercase text-[8px] font-bold block mb-1">
+                                                    {m.role === 'user' ? 'Transmission Inbound' : 'Neural Echo'}
+                                                </span>
+                                                <div className="flex justify-between items-start gap-4">
+                                                    <p className="flex-1">{m.content}</p>
+                                                    <button 
+                                                        onClick={() => handleShare(m.content, m.role === 'user' ? 'Me' : 'Companion')}
+                                                        className="mt-1 opacity-20 hover:opacity-100 transition-opacity"
+                                                    >
+                                                        <Share2 className="w-3 h-3" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )) : (
+                                            <div className="h-full flex items-center justify-center py-10 opacity-20 italic text-sm">
+                                                History stream offline...
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </section>
 
-                        {/* Recent Connections Grid */}
+                        {/* Council Mode Section */}
+                        <section className="bg-white/5 border rounded-3xl p-8 backdrop-blur-xl" style={sectionStyle}>
+                            <div className="flex items-center justify-between mb-8">
+                                <h2 className="text-xl font-medium flex items-center gap-3">
+                                    <Users className="w-5 h-5 text-[#FFB300]" /> Council of Buddies
+                                </h2>
+                                <span className="text-[10px] text-white/30 uppercase tracking-[0.2em]">Collective Wisdom</span>
+                            </div>
+
+                            <div className="space-y-6">
+                                <div className="flex gap-4">
+                                    <input 
+                                        type="text" 
+                                        value={councilQuestion}
+                                        onChange={(e) => setCouncilQuestion(e.target.value)}
+                                        placeholder="Ask the council for advice..." 
+                                        className="flex-1 bg-white/5 border rounded-2xl px-6 py-4 text-sm focus:outline-none"
+                                        style={{ borderColor: `${personaTheme.secondary}40` }}
+                                    />
+                                    <button 
+                                        onClick={handleAskCouncil}
+                                        disabled={askingCouncil || !councilQuestion}
+                                        className="px-8 rounded-2xl font-bold text-sm disabled:opacity-50"
+                                        style={{ backgroundColor: personaTheme.primary, color: "#05050A" }}
+                                    >
+                                        {askingCouncil ? "GATHERING..." : "CONSULT"}
+                                    </button>
+                                </div>
+
+                                {councilResults && (
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                                        {councilResults.map((ans, i) => (
+                                            <div key={i} className="bg-white/5 border rounded-2xl p-6 relative overflow-hidden group" style={sectionStyle}>
+                                                <div className="absolute top-0 right-0 p-2 opacity-5 group-hover:opacity-10 transition-opacity">
+                                                    <Sparkles className="w-8 h-8" />
+                                                </div>
+                                                <div className="flex justify-between items-center mb-3">
+                                                    <h3 className="text-xs font-bold text-[#FFB300] uppercase tracking-widest flex items-center gap-2">
+                                                        <div className="w-1 h-1 rounded-full bg-[#FFB300]" /> {ans.name}
+                                                    </h3>
+                                                    <button 
+                                                        onClick={() => handleShare(ans.content, ans.name)}
+                                                        className="p-1.5 bg-white/5 rounded-lg opacity-40 hover:opacity-100 transition-opacity"
+                                                        title="Share Transmission"
+                                                    >
+                                                        <Share2 className="w-3 h-3 text-[#FFB300]" />
+                                                    </button>
+                                                </div>
+                                                <p className="text-sm text-white/70 italic leading-relaxed">
+                                                    "{ans.content}"
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </section>
                         <section>
                              <div className="flex items-center justify-between mb-6">
                                 <h2 className="text-xl font-medium">Neural Connections</h2>
@@ -182,15 +491,23 @@ function DashboardContent() {
                                                 <Sparkles className="w-12 h-12" />
                                             </div>
                                             <div className="flex items-center gap-4 mb-4">
-                                                <div className="w-16 h-16 rounded-xl bg-blue-500/20 border border-white/10 overflow-hidden">
-                                                    {/* Persona avatar placeholder */}
-                                                    <div className="w-full h-full flex items-center justify-center bg-gray-800 text-2xl">
-                                                        {p.name?.[0] || '🤖'}
-                                                    </div>
+                                                <div className="w-16 h-16 rounded-xl bg-white/5 border border-white/10 overflow-hidden relative">
+                                                    {PERSONAS.find(persona => persona.id === p.id)?.imageUrl ? (
+                                                        <Image 
+                                                            src={PERSONAS.find(persona => persona.id === p.id)!.imageUrl!} 
+                                                            alt={p.name}
+                                                            fill
+                                                            className="object-cover"
+                                                        />
+                                                    ) : (
+                                                        <div className="w-full h-full flex items-center justify-center bg-gray-800 text-2xl">
+                                                            {PERSONAS.find(persona => persona.id === p.id)?.icon || p.name?.[0] || '🤖'}
+                                                        </div>
+                                                    )}
                                                 </div>
                                                 <div>
                                                     <h3 className="text-lg font-medium">{p.name || "Unknown Agent"}</h3>
-                                                    <p className="text-xs text-[#FFB300]">Stable Attachment</p>
+                                                    <p className="text-xs text-[#FFB300]">{PERSONAS.find(persona => persona.id === p.id)?.tag || 'Stable Attachment'}</p>
                                                 </div>
                                             </div>
                                             <div className="flex gap-4 pt-4 border-t border-white/5">
@@ -216,6 +533,46 @@ function DashboardContent() {
 
                     {/* Sidebar / Profile Settings Column */}
                     <div className="space-y-8">
+                        <section className="bg-white/5 border border-white/10 rounded-3xl p-6 relative overflow-hidden" style={sectionStyle}>
+                            <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: `radial-gradient(circle at 50% 50%, ${personaTheme.primary}, transparent)` }} />
+                            <div className="flex items-center gap-3 mb-6">
+                                <Sparkles className="w-5 h-5 text-[#FFB300]" />
+                                <h2 className="text-lg font-medium text-white/80">Neural Vault</h2>
+                            </div>
+                            <div className="space-y-4 relative z-10">
+                                {profile.level && profile.level >= 3 ? (
+                                    <div className="p-4 rounded-2xl bg-[#FFB300]/10 border border-[#FFB300]/20 flex items-center gap-4">
+                                        <div className="p-2 bg-[#FFB300] rounded-xl text-black">
+                                            <Shield className="w-4 h-4" />
+                                        </div>
+                                        <div>
+                                            <div className="text-xs font-bold text-[#FFB300] uppercase">Level 3 Reward</div>
+                                            <div className="text-xs text-white/70">Neural Link Stable. Access granted.</div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center gap-4 grayscale opacity-40">
+                                        <div className="p-2 bg-white/20 rounded-xl text-white">
+                                            <Shield className="w-4 h-4" />
+                                        </div>
+                                        <div>
+                                            <div className="text-xs font-bold text-white/40 uppercase tracking-widest">LOCKED</div>
+                                            <div className="text-xs text-white/30 italic font-light">Reach Level 3 to unlock.</div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="space-y-2 mt-4 pt-4 border-t border-white/5">
+                                    <h4 className="text-[10px] font-bold text-white/30 uppercase tracking-[0.2em] mb-3">Sync Fragments</h4>
+                                    {profile.unlockedSecrets && profile.unlockedSecrets.length > 0 ? profile.unlockedSecrets.map((s, i) => (
+                                        <div key={i} className="text-xs text-white/60 flex items-center gap-2">
+                                            <CheckCircle2 className="w-3 h-3 text-[#FFB300]" /> {s}
+                                        </div>
+                                    )) : <div className="text-[10px] text-white/20 italic font-light">No artifacts recovered yet.</div>}
+                                </div>
+                            </div>
+                        </section>
+
                         <section className="bg-[#FFB300]/5 border border-[#FFB300]/20 rounded-3xl p-6">
                             <div className="flex items-center gap-4 mb-6">
                                 <div className="w-12 h-12 bg-[#FFB300] rounded-2xl flex items-center justify-center text-[#05050A]">
@@ -232,8 +589,10 @@ function DashboardContent() {
                                     <span className="text-sm text-white/50">Neural ID</span>
                                     <span className="text-xs font-mono text-white/30">#{chatId}</span>
                                 </div>
-                                <button className="w-full py-4 bg-[#FFB300] text-[#05050A] rounded-2xl font-bold text-sm tracking-wide transition-transform active:scale-95 mt-4">
-                                    UNLOCK PRO FEATURES
+                                <button className="w-full py-4 bg-[#FFB300] text-[#05050A] rounded-2xl font-bold text-sm tracking-wide transition-transform active:scale-95 mt-4 group">
+                                    <span className="flex items-center justify-center gap-2">
+                                        UPGRADE PROTOCOL <ArrowLeft className="w-4 h-4 rotate-180 group-hover:translate-x-1 transition-transform" />
+                                    </span>
                                 </button>
                             </div>
                         </section>
@@ -255,6 +614,21 @@ function DashboardContent() {
                 <footer className="mt-20 pt-8 border-t border-white/5 text-center text-white/20 text-xs">
                     BuddyClaw Neural Link Protocol &copy; 2026. Data localized via Geo-IP.
                 </footer>
+                <AnimatePresence>
+                    {showToast && (
+                        <motion.div 
+                            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.9 }}
+                            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] bg-[#FFB300] text-black px-6 py-3 rounded-full shadow-[0_10px_40px_rgba(255,179,0,0.3)] flex items-center gap-3 border border-white/20 backdrop-blur-md"
+                        >
+                            <div className="w-5 h-5 bg-black/10 rounded-full flex items-center justify-center">
+                                <CheckCircle2 className="w-4 h-4" />
+                            </div>
+                            <span className="font-bold tracking-tight text-sm uppercase">{toastMessage}</span>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
             </div>
         </div>
     );
